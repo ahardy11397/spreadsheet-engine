@@ -1,0 +1,127 @@
+# cells.meme -- cell-name math: parsing, column <-> letter conversion,
+# deterministic sort keys, and range expansion.
+#
+# Cell names are column letter(s) A..Z (1 or 2 letters, uppercase only,
+# so A..ZZ = 1..702) followed by a row 1..999. All string handling is
+# plain char scanning so every backend behaves identically.
+
+record CellPos:
+    col: Int
+    row: Int
+
+function alphabet() -> String:
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+function col_to_num(letters: String) -> Int:
+    # base-26 with A=1; -1 when any character is not an uppercase letter
+    define n as 0
+    for i from 0 to length of string letters - 1:
+        define c as char at i of letters
+        define pos as index of c in alphabet()
+        if pos < 0:
+            return 0 - 1
+        set n to n * 26 + pos + 1
+    return n
+
+function num_to_col(n: Int) -> String:
+    # bijective base-26: 1 -> A, 26 -> Z, 27 -> AA
+    define out as ""
+    define rest as n
+    while rest > 0:
+        define r as rest - 1
+        define digit as r % 26
+        set out to char at digit of alphabet() + out
+        set rest to r / 26
+    return out
+
+function parse_cell(name: String) -> Optional<CellPos>:
+    # <uppercase letters 1..2><digits>, row 1..999, nothing else allowed
+    define t as trim name
+    define n as length of string t
+    if n < 2:
+        return nothing
+    define letters as ""
+    define digits as ""
+    define i as 0
+    define in_letters as true
+    while i < n:
+        define c as char at i of t
+        if in_letters:
+            if index of c in alphabet() >= 0:
+                set letters to letters + c
+                add 1 to i
+            else:
+                set in_letters to false
+        else:
+            if is digit c:
+                set digits to digits + c
+                add 1 to i
+            else:
+                return nothing
+    if length of string letters == 0 or length of string digits == 0:
+        return nothing
+    define col as col_to_num(letters)
+    if col < 1 or col > 702:
+        return nothing
+    define row as integer value of digits
+    if row < 1 or row > 999:
+        return nothing
+    return optional CellPos(col=col, row=row)
+
+function pad_zero(n: Int, width: Int) -> String:
+    define out as text of n
+    while length of string out < width:
+        set out to "0" + out
+    return out
+
+function cell_key(name: String) -> String:
+    # sortable key: padded column number, then padded row, then the name.
+    # Ascending string sort of keys is spreadsheet order (A, B, .. Z, AA, AB).
+    define pos as parse_cell(name)
+    if pos is nothing:
+        return "0000:000:" + name
+    define p as value of pos
+    return pad_zero(p.col, 4) + ":" + pad_zero(p.row, 3) + ":" + name
+
+function cell_names_sorted(names: List<String>) -> List<String>:
+    # sort by key, then map back to the names encoded at the tail of the key
+    define keys as empty List<String>
+    for each nm in names:
+        add cell_key(nm) to keys
+    sort keys ascending
+    define out as empty List<String>
+    for each k in keys:
+        # the name is everything after the fixed-width key prefix
+        # (4 digits + ":" + 3 digits + ":"); slicing by offset keeps
+        # corrupt names containing ":" intact
+        define name_part as slice k from 9 to length of string k
+        add name_part to out
+    return out
+
+function range_cells(start_name: String, end_name: String) -> List<String>:
+    # all cell names between the two corners inclusive, normalized so the
+    # iteration is column-major spreadsheet order (A1, A2, .., B1, B2, ..)
+    define out as empty List<String>
+    define a as parse_cell(start_name)
+    define b as parse_cell(end_name)
+    if a is nothing or b is nothing:
+        return out
+    define pa as value of a
+    define pb as value of b
+    define c1 as pa.col
+    define c2 as pb.col
+    if c2 < c1:
+        define ct as c1
+        set c1 to c2
+        set c2 to ct
+    define r1 as pa.row
+    define r2 as pb.row
+    if r2 < r1:
+        define rt as r1
+        set r1 to r2
+        set r2 to rt
+    for c from c1 to c2:
+        define letters as num_to_col(c)
+        for r from r1 to r2:
+            add letters + text of r to out
+    return out

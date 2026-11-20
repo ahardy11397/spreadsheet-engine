@@ -1,0 +1,111 @@
+# 02_formula_test.meme -- formula parsing into the Formula record and
+# dependency extraction.
+use cells
+use formula
+
+test parse_literal_test:
+    define f as parse_formula("42")
+    assert f is not nothing
+    define v as value of f
+    assert v.kind == 0
+    assert v.lit == 42
+    define g as parse_formula("-7")
+    assert g is not nothing
+    define gv as value of g
+    assert gv.kind == 0
+    assert gv.lit == 0 - 7
+
+test parse_ref_test:
+    define f as parse_formula("B2")
+    assert f is not nothing
+    define v as value of f
+    assert v.kind == 1
+    assert v.ref == "B2"
+
+test parse_binop_test:
+    define f as parse_formula("A1 + 5")
+    assert f is not nothing
+    define v as value of f
+    assert v.kind == 2
+    assert v.op == "+"
+    assert v.left_is_ref
+    assert v.left_ref == "A1"
+    assert not v.right_is_ref
+    assert v.right_lit == 5
+
+    define g as parse_formula("B2*C3")
+    assert g is not nothing
+    define gv as value of g
+    assert gv.kind == 2
+    assert gv.op == "*"
+    assert gv.left_ref == "B2"
+    assert gv.right_ref == "C3"
+
+    define h as parse_formula("3 - A1")
+    assert h is not nothing
+    define hv as value of h
+    assert hv.kind == 2
+    assert hv.op == "-"
+    assert not hv.left_is_ref
+    assert hv.left_lit == 3
+    assert hv.right_is_ref
+
+test parse_range_fn_test:
+    define f as parse_formula("SUM(A1:A5)")
+    assert f is not nothing
+    define v as value of f
+    assert v.kind == 3
+    assert v.fn_name == "SUM"
+    assert v.range_start == "A1"
+    assert v.range_end == "A5"
+    define g as parse_formula("  AVG(B1:B4)  ")
+    assert g is not nothing
+    define gv as value of g
+    assert gv.fn_name == "AVG"
+    define h as parse_formula("MIN(A1:C1)")
+    assert h is not nothing
+    define hv as value of h
+    assert hv.fn_name == "MIN"
+    define m as parse_formula("MAX(A1:A2)")
+    assert m is not nothing
+    define mv as value of m
+    assert mv.fn_name == "MAX"
+
+test parse_formula_invalid_test:
+    assert parse_formula("") is nothing
+    assert parse_formula("   ") is nothing
+    assert parse_formula("A0") is nothing
+    assert parse_formula("A1 + ") is nothing
+    assert parse_formula("+ A1") is nothing
+    assert parse_formula("A1 & B2") is nothing
+    assert parse_formula("SUM(A1)") is nothing
+    assert parse_formula("SUM(A1:B2") is nothing
+    assert parse_formula("MEAN(A1:A2)") is nothing
+    assert parse_formula("SUM(A1:B2:C3)") is nothing
+    assert parse_formula("A1 + B0") is nothing
+
+test formula_refs_test:
+    define f as parse_formula("A1 + B2")
+    assert f is not nothing
+    define refs as formula_refs(value of f)
+    assert length of refs == 2
+    assert refs[0] == "A1"
+    assert refs[1] == "B2"
+
+    define g as parse_formula("SUM(B1:B3)")
+    assert g is not nothing
+    define grefs as formula_refs(value of g)
+    assert length of grefs == 3
+    assert grefs[0] == "B1"
+    assert grefs[2] == "B3"
+
+    define h as parse_formula("42")
+    assert h is not nothing
+    assert length of formula_refs(value of h) == 0
+
+    define m as parse_formula("A1 * A1")
+    assert m is not nothing
+    define mrefs as formula_refs(value of m)
+    assert length of mrefs == 2
+    assert mrefs[0] == "A1"
+    assert mrefs[1] == "A1"

@@ -1,0 +1,78 @@
+# 01_cells_test.meme -- cell name parsing, column math, deterministic
+# ordering keys, and range expansion.
+use cells
+
+test col_to_num_test:
+    assert col_to_num("A") == 1
+    assert col_to_num("Z") == 26
+    assert col_to_num("AA") == 27
+    assert col_to_num("ZZ") == 702
+    assert col_to_num("a") == 0 - 1
+    assert col_to_num("!") == 0 - 1
+
+test num_to_col_test:
+    assert num_to_col(1) == "A"
+    assert num_to_col(26) == "Z"
+    assert num_to_col(27) == "AA"
+    assert num_to_col(702) == "ZZ"
+
+test parse_cell_valid_test:
+    assert parse_cell("A1") is not nothing
+    assert parse_cell("B12") is not nothing
+    assert parse_cell("AA999") is not nothing
+    define p as parse_cell("AB7")
+    assert p is not nothing
+    define q as value of p
+    assert q.col == 28
+    assert q.row == 7
+
+test parse_cell_invalid_test:
+    assert parse_cell("A") is nothing
+    assert parse_cell("1A") is nothing
+    assert parse_cell("A0") is nothing
+    assert parse_cell("A1000") is nothing
+    assert parse_cell("A1x") is nothing
+    assert parse_cell("AAA1") is nothing
+    assert parse_cell("") is nothing
+    assert parse_cell("A 1") is nothing
+
+test cell_names_sorted_test:
+    define names as empty List<String>
+    add "B2" to names
+    add "A10" to names
+    add "A2" to names
+    add "AA1" to names
+    add "Z9" to names
+    define ordered as cell_names_sorted(names)
+    assert ordered[0] == "A2"
+    assert ordered[1] == "A10"
+    assert ordered[2] == "B2"
+    assert ordered[3] == "Z9"
+    assert ordered[4] == "AA1"
+
+test cell_names_sorted_corrupt_name_test:
+    # a corrupt record whose name contains ":" must survive sorting
+    # unmangled (names are recovered by fixed offset, not ":"-splitting)
+    define names as empty List<String>
+    add "A:1" to names
+    add "B2" to names
+    define ordered as cell_names_sorted(names)
+    assert length of ordered == 2
+    assert ordered[0] == "A:1"
+    assert ordered[1] == "B2"
+
+test range_cells_column_test:
+    define r1 as range_cells("A1", "A3")
+    assert length of r1 == 3
+    assert r1[0] == "A1"
+    assert r1[1] == "A2"
+    assert r1[2] == "A3"
+
+test range_cells_normalized_test:
+    # reversed corners are normalized into spreadsheet order
+    define r2 as range_cells("B2", "A1")
+    assert length of r2 == 4
+    assert r2[0] == "A1"
+    assert r2[1] == "A2"
+    assert r2[2] == "B1"
+    assert r2[3] == "B2"

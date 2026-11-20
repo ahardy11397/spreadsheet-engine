@@ -1,0 +1,143 @@
+# formula.meme -- formula parsing and dependency extraction.
+#
+# A formula is one of:
+#   <int>                      literal (Int)
+#   <cellref>                  e.g. B2
+#   <cellref> +|-|* <cellref|int>
+#   SUM(A1:A5)  AVG(A1:A5)  MIN(A1:A5)  MAX(A1:A5)
+#
+# Whitespace is allowed around tokens. Everything parses with plain
+# string operations (no regex) so all six backends behave identically.
+
+use cells
+
+record Formula:
+    kind: Int          # 0 = literal, 1 = ref, 2 = binop, 3 = range function
+    op: String         # "+", "-" or "*" for kind 2
+    lit: Int           # literal value for kind 0
+    ref: String        # cell reference for kind 1
+    left_is_ref: Bool  # kind 2 left operand
+    left_ref: String
+    left_lit: Int
+    right_is_ref: Bool # kind 2 right operand
+    right_ref: String
+    right_lit: Int
+    fn_name: String    # "SUM" | "AVG" | "MIN" | "MAX" for kind 3
+    range_start: String
+    range_end: String
+
+function empty_formula() -> Formula:
+    return Formula(kind=0, op="", lit=0, ref="", left_is_ref=false, left_ref="", left_lit=0, right_is_ref=false, right_ref="", right_lit=0, fn_name="", range_start="", range_end="")
+
+function is_int_literal(s: String) -> Bool:
+    define t as trim s
+    define n as length of string t
+    if n == 0:
+        return false
+    define start as 0
+    if char at 0 of t == "-":
+        set start to 1
+    if start == n:
+        return false
+    for i from start to n - 1:
+        define c as char at i of t
+        if not (is digit c):
+            return false
+    return true
+
+function fn_names() -> List<String>:
+    define out as empty List<String>
+    add "SUM" to out
+    add "AVG" to out
+    add "MIN" to out
+    add "MAX" to out
+    return out
+
+function parse_formula(text: String) -> Optional<Formula>:
+    define t as trim text
+    define n as length of string t
+    if n == 0:
+        return nothing
+    # range functions: NAME(start:end)
+    define fnames as fn_names()
+    for each fname in fnames:
+        if t starts with fname + "(":
+            if not (t ends with ")"):
+                return nothing
+            define inner as slice t from length of string fname + 1 to n - 1
+            define parts as split inner by ":"
+            if length of parts != 2:
+                return nothing
+            define s as trim parts[0]
+            define e as trim parts[1]
+            if parse_cell(s) is nothing:
+                return nothing
+            if parse_cell(e) is nothing:
+                return nothing
+            define f as empty_formula()
+            set f.kind to 3
+            set f.fn_name to fname
+            set f.range_start to s
+            set f.range_end to e
+            return optional f
+    # binary operator: first +, - or * at index >= 1 (a leading '-' at
+    # index 0 belongs to a negative literal)
+    define op_idx as 0 - 1
+    define op_char as ""
+    if n > 1:
+        for i from 1 to n - 1:
+            define c as char at i of t
+            if c == "+" or c == "-" or c == "*":
+                set op_idx to i
+                set op_char to c
+                break
+    if op_idx < 0:
+        # single token: literal or cell reference
+        if is_int_literal(t):
+            define lit_f as empty_formula()
+            set lit_f.lit to integer value of t
+            return optional lit_f
+        if parse_cell(t) is not nothing:
+            define ref_f as empty_formula()
+            set ref_f.kind to 1
+            set ref_f.ref to t
+            return optional ref_f
+        return nothing
+    define left as trim slice t from 0 to op_idx
+    define right as trim slice t from op_idx + 1 to n
+    if length of string left == 0 or length of string right == 0:
+        return nothing
+    define b as empty_formula()
+    set b.kind to 2
+    set b.op to op_char
+    if is_int_literal(left):
+        set b.left_lit to integer value of left
+    else:
+        if parse_cell(left) is nothing:
+            return nothing
+        set b.left_is_ref to true
+        set b.left_ref to left
+    if is_int_literal(right):
+        set b.right_lit to integer value of right
+    else:
+        if parse_cell(right) is nothing:
+            return nothing
+        set b.right_is_ref to true
+        set b.right_ref to right
+    return optional b
+
+function formula_refs(f: Formula) -> List<String>:
+    # direct cell dependencies; ranges are materialized into cell names
+    define out as empty List<String>
+    if f.kind == 1:
+        add f.ref to out
+    if f.kind == 2:
+        if f.left_is_ref:
+            add f.left_ref to out
+        if f.right_is_ref:
+            add f.right_ref to out
+    if f.kind == 3:
+        define cells_in_range as range_cells(f.range_start, f.range_end)
+        for each nm in cells_in_range:
+            add nm to out
+    return out

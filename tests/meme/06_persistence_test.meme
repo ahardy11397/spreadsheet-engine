@@ -1,0 +1,48 @@
+# 06_persistence_test.meme -- JSON roundtrips through the Optional record
+# readers; missing, corrupt, and wrong-shape files load as an empty sheet
+# with no traceback.
+use cells
+use formula
+use sheet
+
+test json_roundtrip_cells_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="5") to cells
+    add Cell(name="B2", formula="SUM(A1:A3)") to cells
+    call save_cells(cells, "se06_roundtrip.json")
+    define raw as read json records Cell from file "se06_roundtrip.json" or else nothing
+    assert raw is not nothing
+    define back as value of raw
+    assert length of back == 2
+    assert back[0].name == "A1"
+    assert back[0].formula == "5"
+    assert back[1].name == "B2"
+    assert back[1].formula == "SUM(A1:A3)"
+
+test load_missing_file_test:
+    define cells as load_cells("se06_missing.json")
+    assert length of cells == 0
+
+test corrupt_file_tolerance_test:
+    write file "se06_corrupt.json" with "not json at all"
+    define raw as read json records Cell from file "se06_corrupt.json" or else nothing
+    assert raw is nothing
+    define cells as load_cells("se06_corrupt.json")
+    assert length of cells == 0
+
+test wrong_shape_file_tolerance_test:
+    # valid JSON, but not an array of Cell records
+    write file "se06_wrong_shape.json" with "[1, 2, 3]"
+    define raw as read json records Cell from file "se06_wrong_shape.json" or else nothing
+    assert raw is nothing
+    define cells as load_cells("se06_wrong_shape.json")
+    assert length of cells == 0
+
+test save_load_roundtrip_via_helpers_test:
+    define cells as empty List<Cell>
+    add Cell(name="C3", formula="A1 * 2") to cells
+    call save_cells(cells, "se06_helper.json")
+    define back as load_cells("se06_helper.json")
+    assert length of back == 1
+    assert back[0].name == "C3"
+    assert back[0].formula == "A1 * 2"

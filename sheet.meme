@@ -1,0 +1,318 @@
+# sheet.meme -- the spreadsheet engine: persistence (JSON via Optional
+# readers), pull-based evaluation, set-time cycle detection, dependency
+# queries, deterministic topological order, and grid display.
+#
+# Cell VALUES are Int only. Missing/corrupt data files load as an empty
+# sheet, never a traceback. All list returns are fresh element-wise
+# copies so every backend sees identical value semantics.
+
+use cells
+use formula
+
+record Cell:
+    name: String
+    formula: String
+
+record TopoResult:
+    ok: Bool
+    order: List<String>
+    stuck: String
+
+# ---------------------------------------------------------------- persistence
+
+function load_cells(path: String) -> List<Cell>:
+    define loaded as read json records Cell from file path or else nothing
+    define result as empty List<Cell>
+    if loaded is not nothing:
+        set result to value of loaded
+    return result
+
+function save_cells(cells: List<Cell>, path: String) -> Void:
+    write cells as json to file path
+
+# --------------------------------------------------------------- list helpers
+
+function copy_cells(cells: List<Cell>) -> List<Cell>:
+    define out as empty List<Cell>
+    for each c in cells:
+        add c to out
+    return out
+
+function find_cell_index(cells: List<Cell>, wanted: String) -> Int:
+    define idx as 0 - 1
+    for i from 0 to length of cells - 1:
+        if cells[i].name == wanted:
+            set idx to i
+    return idx
+
+function apply_set(cells: List<Cell>, name: String, formula_text: String) -> List<Cell>:
+    # upsert returning a NEW list; the caller's list is never mutated
+    define out as copy_cells(cells)
+    define idx as find_cell_index(out, name)
+    if idx >= 0:
+        set out[idx] to Cell(name=out[idx].name, formula=formula_text)
+    else:
+        add Cell(name=name, formula=formula_text) to out
+    return out
+
+# ------------------------------------------------------------------ evaluation
+
+function list_contains(items: List<String>, wanted: String) -> Bool:
+    for each s in items:
+        if s == wanted:
+            return true
+    return false
+
+function eval_cell(cells: List<Cell>, name: String, visiting: List<String>) -> Int:
+    # pull-based evaluation; `visiting` is the path of cells currently
+    # being evaluated — it guards against re-entering a cell that is
+    # already on the path (possible only in corrupt data). Self-recursive
+    # on the formula's dependencies. (A List is used instead of a Set
+    # because the Rust backend does not clone Set-valued arguments.)
+    if list_contains(visiting, name):
+        return 0
+    define idx as find_cell_index(cells, name)
+    if idx < 0:
+        return 0
+    define fopt as parse_formula(cells[idx].formula)
+    if fopt is nothing:
+        return 0
+    define f as value of fopt
+    define v as 0
+    add name to visiting
+    if f.kind == 0:
+        set v to f.lit
+    else:
+        if f.kind == 1:
+            set v to eval_cell(cells, f.ref, visiting)
+        else:
+            if f.kind == 2:
+                define l as f.left_lit
+                if f.left_is_ref:
+                    set l to eval_cell(cells, f.left_ref, visiting)
+                define r as f.right_lit
+                if f.right_is_ref:
+                    set r to eval_cell(cells, f.right_ref, visiting)
+                if f.op == "+":
+                    set v to l + r
+                else:
+                    if f.op == "-":
+                        set v to l - r
+                    else:
+                        set v to l * r
+            else:
+                # kind 3: range function; empty cells contribute 0
+                define names as range_cells(f.range_start, f.range_end)
+                define total as 0
+                define mn as 0
+                define mx as 0
+                define count as 0
+                define first as true
+                for each nm in names:
+                    define v1 as eval_cell(cells, nm, visiting)
+                    add v1 to total
+                    add 1 to count
+                    if first:
+                        set mn to v1
+                        set mx to v1
+                        set first to false
+                    else:
+                        if v1 < mn:
+                            set mn to v1
+                        if v1 > mx:
+                            set mx to v1
+                if f.fn_name == "SUM":
+                    set v to total
+                else:
+                    if f.fn_name == "MIN":
+                        set v to mn
+                    else:
+                        if f.fn_name == "MAX":
+                            set v to mx
+                        else:
+                            # AVG: total / count (count >= 1; a range is
+                            # never empty)
+                            set v to total / count
+    remove last item from visiting
+    return v
+
+# --------------------------------------------------------------- cycle checks
+
+function would_cycle(cells: List<Cell>, target: String, refs: List<String>) -> Bool:
+    # True when `target` is reachable from any of `refs` by following the
+    # CURRENT dependency edges (so setting target to a formula with these
+    # refs would close a cycle). Self-reference is included: target in refs.
+    #
+    # Fast path first: a direct hit answers instantly even when refs is a
+    # huge materialized range (e.g. SUM(A1:ZZ999) set into A1).
+    for each r in refs:
+        if r == target:
+            return true
+    # Breadth-first by index: the frontier is walked in push order, so
+    # spreadsheet-order refs (where a range target usually sits) are
+    # checked before deep chains. A Set tracks visited cells.
+    define visited as empty set of String
+    define frontier as empty List<String>
+    for each r in refs:
+        add r to frontier
+    define i as 0
+    while i < length of frontier:
+        define nm as frontier[i]
+        add 1 to i
+        if nm == target:
+            return true
+        if visited contains nm:
+            continue
+        add nm to set visited
+        define idx as find_cell_index(cells, nm)
+        if idx >= 0:
+            define fopt as parse_formula(cells[idx].formula)
+            if fopt is not nothing:
+                define f as value of fopt
+                define deps as formula_refs(f)
+                for each d in deps:
+                    add d to frontier
+    return false
+
+# ------------------------------------------------------------- dep queries
+
+function deps_of(cells: List<Cell>, name: String) -> List<String>:
+    # direct dependencies of one populated cell, sorted, deduplicated
+    define out as empty List<String>
+    define idx as find_cell_index(cells, name)
+    if idx < 0:
+        return out
+    define fopt as parse_formula(cells[idx].formula)
+    if fopt is nothing:
+        return out
+    define f as value of fopt
+    define refs as formula_refs(f)
+    define seen as empty set of String
+    for each r in refs:
+        if not (seen contains r):
+            add r to set seen
+            add r to out
+    return cell_names_sorted(out)
+
+function dependents_of(cells: List<Cell>, target: String) -> List<String>:
+    # populated cells whose formula references target directly, sorted
+    define out as empty List<String>
+    for each c in cells:
+        define fopt as parse_formula(c.formula)
+        if fopt is not nothing:
+            define f as value of fopt
+            define refs as formula_refs(f)
+            define hits as false
+            for each r in refs:
+                if r == target:
+                    set hits to true
+                    break
+            if hits:
+                add c.name to out
+    return cell_names_sorted(out)
+
+# -------------------------------------------------------------- topological
+
+function topo_order(cells: List<Cell>) -> TopoResult:
+    # Kahn-style emission over all populated cells; ties broken by
+    # spreadsheet order so the result is deterministic. A dependency that
+    # is not populated is treated as satisfied (it evaluates as 0).
+    define names as empty List<String>
+    for each c in cells:
+        # corrupt records with unparseable names are skipped entirely
+        if parse_cell(c.name) is not nothing:
+            add c.name to names
+    define ordered_names as cell_names_sorted(names)
+    define emitted as empty set of String
+    define out as empty List<String>
+    define remaining as length of ordered_names
+    define stuck as ""
+    while remaining > 0:
+        define progress as false
+        for each nm in ordered_names:
+            if emitted contains nm:
+                continue
+            define deps as deps_of(cells, nm)
+            define ready as true
+            for each d in deps:
+                if not (emitted contains d):
+                    define didx as find_cell_index(cells, d)
+                    if didx >= 0:
+                        set ready to false
+                        break
+            if ready:
+                add nm to set emitted
+                add nm to out
+                subtract 1 from remaining
+                set progress to true
+        if not progress:
+            for each nm in ordered_names:
+                if not (emitted contains nm):
+                    set stuck to nm
+                    break
+            set remaining to 0
+    define result as TopoResult(ok=true, order=out, stuck="")
+    if length of string stuck > 0:
+        set result.ok to false
+        set result.stuck to stuck
+    return result
+
+# ------------------------------------------------------------------ display
+
+function pad_right(s: String, w: Int) -> String:
+    define out as s
+    while length of string out < w:
+        set out to out + " "
+    return out
+
+function display_lines(cells: List<Cell>) -> List<String>:
+    # grid dump over A1..(max populated column, max populated row);
+    # populated cells show their evaluated value, empty cells are blank
+    define out as empty List<String>
+    if length of cells == 0:
+        return out
+    define max_col as 1
+    define max_row as 1
+    for each c in cells:
+        define pos as parse_cell(c.name)
+        if pos is not nothing:
+            define p as value of pos
+            if p.col > max_col:
+                set max_col to p.col
+            if p.row > max_row:
+                set max_row to p.row
+    define width as 1
+    for cn from 1 to max_col:
+        define header as num_to_col(cn)
+        if length of string header > width:
+            set width to length of string header
+    for each c in cells:
+        define visiting as empty List<String>
+        define v as eval_cell(cells, c.name, visiting)
+        define vt as text of v
+        if length of string vt > width:
+            set width to length of string vt
+    define rlw as length of string text of max_row
+    if rlw < 1:
+        set rlw to 1
+    define header_line as pad_right("", rlw) + " | "
+    for cn from 1 to max_col:
+        if cn > 1:
+            set header_line to header_line + " | "
+        set header_line to header_line + pad_right(num_to_col(cn), width)
+    add header_line to out
+    for r from 1 to max_row:
+        define line as pad_right(text of r, rlw) + " | "
+        for cn from 1 to max_col:
+            if cn > 1:
+                set line to line + " | "
+            define nm as num_to_col(cn) + text of r
+            define idx as find_cell_index(cells, nm)
+            define field as ""
+            if idx >= 0:
+                define visiting as empty List<String>
+                define v as eval_cell(cells, nm, visiting)
+                set field to text of v
+            set line to line + pad_right(field, width)
+        add line to out
+    return out

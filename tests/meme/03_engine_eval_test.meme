@@ -1,0 +1,103 @@
+# 03_engine_eval_test.meme -- pull-based evaluation: literals, refs,
+# arithmetic chains, range functions over sparse ranges, transitive
+# re-evaluation after a change, and the runtime cycle guard.
+use cells
+use formula
+use sheet
+
+test eval_literal_and_ref_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="5") to cells
+    add Cell(name="B1", formula="A1") to cells
+    add Cell(name="C1", formula="-12") to cells
+    define visiting as empty List<String>
+    assert eval_cell(cells, "A1", visiting) == 5
+    assert eval_cell(cells, "B1", visiting) == 5
+    assert eval_cell(cells, "C1", visiting) == 0 - 12
+    # unpopulated cells evaluate as 0 (sparse sheet)
+    assert eval_cell(cells, "Z9", visiting) == 0
+
+test eval_chain_3_deep_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="3") to cells
+    add Cell(name="B1", formula="A1 + 2") to cells
+    add Cell(name="C1", formula="B1 * 2") to cells
+    define visiting as empty List<String>
+    assert eval_cell(cells, "C1", visiting) == 10
+    assert eval_cell(cells, "B1", visiting) == 5
+
+test eval_binop_mixed_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="7 - B2") to cells
+    add Cell(name="B1", formula="A1 * 3") to cells
+    add Cell(name="C1", formula="100 - A1") to cells
+    define visiting as empty List<String>
+    # B2 unpopulated -> 0
+    assert eval_cell(cells, "A1", visiting) == 7
+    assert eval_cell(cells, "B1", visiting) == 21
+    assert eval_cell(cells, "C1", visiting) == 93
+
+test eval_range_fns_sparse_test:
+    # A3 and A5 are unpopulated: empty counts as 0
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="1") to cells
+    add Cell(name="A2", formula="2") to cells
+    add Cell(name="A4", formula="4") to cells
+    add Cell(name="D1", formula="SUM(A1:A5)") to cells
+    add Cell(name="D2", formula="AVG(A1:A5)") to cells
+    add Cell(name="D3", formula="MIN(A1:A5)") to cells
+    add Cell(name="D4", formula="MAX(A1:A5)") to cells
+    define visiting as empty List<String>
+    assert eval_cell(cells, "D1", visiting) == 7
+    assert eval_cell(cells, "D2", visiting) == 1
+    assert eval_cell(cells, "D3", visiting) == 0
+    assert eval_cell(cells, "D4", visiting) == 4
+
+test range_over_empty_span_test:
+    define cells as empty List<Cell>
+    add Cell(name="D1", formula="SUM(F1:F3)") to cells
+    define visiting as empty List<String>
+    assert eval_cell(cells, "D1", visiting) == 0
+
+test transitive_reeval_test:
+    # A1 -> B1 -> C1; changing A1 must move C1
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="2") to cells
+    add Cell(name="B1", formula="A1 + 1") to cells
+    add Cell(name="C1", formula="B1 * 3") to cells
+    define visiting as empty List<String>
+    assert eval_cell(cells, "C1", visiting) == 9
+    set cells to apply_set(cells, "A1", "10")
+    assert eval_cell(cells, "C1", visiting) == 33
+    assert eval_cell(cells, "B1", visiting) == 11
+
+test avg_negative_truncation_test:
+    # parity lock: integer division truncates toward zero on every backend
+    # (-7 + 0) / 2 = -3, never -4
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="-7") to cells
+    add Cell(name="A2", formula="0") to cells
+    add Cell(name="D1", formula="AVG(A1:A2)") to cells
+    define visiting as empty List<String>
+    assert eval_cell(cells, "D1", visiting) == 0 - 3
+
+test corrupt_cycle_guard_test:
+    # a corrupt data file can contain a cycle that bypassed set-time
+    # rejection; evaluation must terminate deterministically, not hang
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="B1 + 1") to cells
+    add Cell(name="B1", formula="A1 + 1") to cells
+    define visiting as empty List<String>
+    # both sides of the corrupt cycle converge to 2 (recursion bottoms out
+    # at the guard and unwinds deterministically)
+    assert eval_cell(cells, "A1", visiting) == 2
+    assert eval_cell(cells, "B1", visiting) == 2
+
+test corrupt_formula_tolerated_test:
+    # a populated cell with an unparseable formula evaluates as 0
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="!!!") to cells
+    add Cell(name="B1", formula="A1 + 1") to cells
+    define visiting as empty List<String>
+    assert eval_cell(cells, "A1", visiting) == 0
+    assert eval_cell(cells, "B1", visiting) == 1

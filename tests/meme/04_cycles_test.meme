@@ -1,0 +1,92 @@
+# 04_cycles_test.meme -- set-time cycle detection: two-cycles, self-cycles,
+# indirect cycles, false positives ruled out, and the guarantee that a
+# rejected set leaves the persisted sheet unchanged.
+use cells
+use formula
+use sheet
+
+test two_cycle_rejected_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="5") to cells
+    add Cell(name="B1", formula="A1 + 1") to cells
+    define fopt as parse_formula("B1 + 1")
+    assert fopt is not nothing
+    define f as value of fopt
+    define refs as formula_refs(f)
+    assert would_cycle(cells, "A1", refs)
+
+test self_cycle_rejected_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="5") to cells
+    define fopt as parse_formula("A1 + 1")
+    assert fopt is not nothing
+    define f as value of fopt
+    define refs as formula_refs(f)
+    assert would_cycle(cells, "A1", refs)
+
+test indirect_cycle_rejected_test:
+    # A1 -> C1 -> B1 -> A1 through existing edges
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="5") to cells
+    add Cell(name="B1", formula="A1 + 1") to cells
+    add Cell(name="C1", formula="B1 * 2") to cells
+    define fopt as parse_formula("C1 + 1")
+    assert fopt is not nothing
+    define f as value of fopt
+    define refs as formula_refs(f)
+    assert would_cycle(cells, "A1", refs)
+
+test no_false_positive_on_dag_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="5") to cells
+    add Cell(name="B1", formula="A1 + 1") to cells
+    add Cell(name="C1", formula="B1 + 1") to cells
+    define fopt as parse_formula("C1 + 1")
+    assert fopt is not nothing
+    define f as value of fopt
+    define refs as formula_refs(f)
+    assert not would_cycle(cells, "D1", refs)
+    # re-setting a leaf from a literal is never a cycle
+    assert not would_cycle(cells, "A1", formula_refs(value of parse_formula("7")))
+
+test rejected_set_leaves_sheet_unchanged_test:
+    # simulate the CLI: initial state saved to disk, a cycle set is
+    # rejected before any save, reload shows the original state
+    define initial as empty List<Cell>
+    add Cell(name="A1", formula="5") to initial
+    add Cell(name="B1", formula="A1 + 1") to initial
+    call save_cells(initial, "se04_reject.json")
+    define cells as load_cells("se04_reject.json")
+    define fopt as parse_formula("B1 + 1")
+    assert fopt is not nothing
+    define f as value of fopt
+    define refs as formula_refs(f)
+    assert would_cycle(cells, "A1", refs)
+    # rejection path: apply_set/save are never called
+    define reloaded as load_cells("se04_reject.json")
+    assert find_cell_index(reloaded, "A1") == 0
+    assert reloaded[0].formula == "5"
+    assert reloaded[1].name == "B1"
+    assert reloaded[1].formula == "A1 + 1"
+    define visiting as empty List<String>
+    assert eval_cell(reloaded, "A1", visiting) == 5
+    assert eval_cell(reloaded, "B1", visiting) == 6
+
+test valid_set_still_applies_after_rejection_test:
+    # after a rejected set, a legitimate set works on the unchanged sheet
+    define initial as empty List<Cell>
+    add Cell(name="A1", formula="5") to initial
+    add Cell(name="B1", formula="A1 + 1") to initial
+    call save_cells(initial, "se04_valid_after.json")
+    define cells as load_cells("se04_valid_after.json")
+    define bad as parse_formula("B1 + 1")
+    define bad_refs as formula_refs(value of bad)
+    assert would_cycle(cells, "A1", bad_refs)
+    define good as parse_formula("A1 * 2")
+    assert good is not nothing
+    set cells to apply_set(cells, "B1", "A1 * 2")
+    call save_cells(cells, "se04_valid_after.json")
+    define reloaded as load_cells("se04_valid_after.json")
+    define visiting as empty List<String>
+    assert reloaded[1].formula == "A1 * 2"
+    assert eval_cell(reloaded, "B1", visiting) == 10

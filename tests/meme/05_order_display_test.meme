@@ -1,0 +1,113 @@
+# 05_order_display_test.meme -- dependency queries, deterministic
+# topological order (valid topo property + cycle reporting), and the
+# display grid.
+use cells
+use formula
+use sheet
+
+test deps_of_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="5") to cells
+    add Cell(name="A2", formula="A1 + A1") to cells
+    add Cell(name="B1", formula="A1 + 1") to cells
+    add Cell(name="C1", formula="SUM(A1:A3)") to cells
+    define d_b as deps_of(cells, "B1")
+    assert length of d_b == 1
+    assert d_b[0] == "A1"
+    define d_c as deps_of(cells, "C1")
+    assert length of d_c == 3
+    assert d_c[0] == "A1"
+    assert d_c[1] == "A2"
+    assert d_c[2] == "A3"
+    # literal cell has no deps; absent cell has no deps
+    assert length of deps_of(cells, "A1") == 0
+    assert length of deps_of(cells, "Z9") == 0
+    # duplicate refs are deduplicated and sorted
+    define d_a2 as deps_of(cells, "A2")
+    assert length of d_a2 == 1
+    assert d_a2[0] == "A1"
+
+test dependents_of_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="5") to cells
+    add Cell(name="A2", formula="A1 + A1") to cells
+    add Cell(name="B1", formula="A1 + 1") to cells
+    add Cell(name="C1", formula="SUM(A1:A3)") to cells
+    define r_a1 as dependents_of(cells, "A1")
+    assert length of r_a1 == 3
+    assert r_a1[0] == "A2"
+    assert r_a1[1] == "B1"
+    assert r_a1[2] == "C1"
+    define r_a3 as dependents_of(cells, "A3")
+    assert length of r_a3 == 1
+    assert r_a3[0] == "C1"
+    assert length of dependents_of(cells, "C1") == 0
+
+test topo_order_dag_test:
+    define cells as empty List<Cell>
+    add Cell(name="B1", formula="A1 + 1") to cells
+    add Cell(name="A1", formula="5") to cells
+    add Cell(name="A2", formula="2") to cells
+    add Cell(name="C1", formula="B1 + A2") to cells
+    define result as topo_order(cells)
+    assert result.ok
+    assert length of result.order == 4
+    define pos_a1 as 0 - 1
+    define pos_a2 as 0 - 1
+    define pos_b1 as 0 - 1
+    define pos_c1 as 0 - 1
+    for i from 0 to length of result.order - 1:
+        if result.order[i] == "A1":
+            set pos_a1 to i
+        if result.order[i] == "A2":
+            set pos_a2 to i
+        if result.order[i] == "B1":
+            set pos_b1 to i
+        if result.order[i] == "C1":
+            set pos_c1 to i
+    assert pos_a1 >= 0
+    assert pos_b1 > pos_a1
+    assert pos_c1 > pos_b1
+    assert pos_c1 > pos_a2
+
+test topo_order_absent_deps_test:
+    # a dependency on an unpopulated cell is satisfied (it evaluates as 0)
+    define cells as empty List<Cell>
+    add Cell(name="B1", formula="Z9 + 1") to cells
+    define result as topo_order(cells)
+    assert result.ok
+    assert length of result.order == 1
+    assert result.order[0] == "B1"
+
+test topo_order_cycle_in_data_test:
+    define cells as empty List<Cell>
+    add Cell(name="B1", formula="A1 + 1") to cells
+    add Cell(name="A1", formula="B1 + 1") to cells
+    define result as topo_order(cells)
+    assert not result.ok
+    assert result.stuck == "A1"
+
+test topo_order_skips_invalid_names_test:
+    # a corrupt record with an unparseable name must not appear in the
+    # topological order; valid cells still order normally
+    define cells as empty List<Cell>
+    add Cell(name="!!", formula="5") to cells
+    add Cell(name="A1", formula="1") to cells
+    define result as topo_order(cells)
+    assert result.ok
+    assert length of result.order == 1
+    assert result.order[0] == "A1"
+
+test display_empty_sheet_test:
+    define cells as empty List<Cell>
+    assert length of display_lines(cells) == 0
+
+test display_lines_grid_test:
+    define cells as empty List<Cell>
+    add Cell(name="A1", formula="5") to cells
+    add Cell(name="B2", formula="A1 * 2") to cells
+    define lines as display_lines(cells)
+    assert length of lines == 3
+    assert lines[0] == "  | A  | B "
+    assert lines[1] == "1 | 5  |   "
+    assert lines[2] == "2 |    | 10"

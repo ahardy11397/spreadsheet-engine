@@ -1,0 +1,123 @@
+# main.meme -- sheet CLI. Thin argv router only; all domain logic lives in
+# the cells, formula, and sheet modules.
+#
+# State: data/sheet.json (List<Cell>), created on demand. A missing or
+# corrupt data file loads as an empty sheet.
+#
+# Exit codes: 0 success, 1 usage/validation error. Every error is exactly
+# one stderr line (the language has no stderr print, so error lines are
+# written with `append ... to file "/dev/stderr"`).
+
+use cells
+use formula
+use sheet
+
+function report_error(msg: String) -> Void:
+    append msg + "\n" to file "/dev/stderr"
+
+function print_usage() -> Void:
+    append "Usage: sheet <command> [args]" + "\n" to file "/dev/stderr"
+    append "  sheet set <cell> <formula>   # formula: <int> | <cell> | <cell> +|-|* <cell|int> | SUM/AVG/MIN/MAX(A1:A5)" + "\n" to file "/dev/stderr"
+    append "  sheet get <cell>             # evaluated value" + "\n" to file "/dev/stderr"
+    append "  sheet display                # grid dump of populated cells" + "\n" to file "/dev/stderr"
+    append "  sheet deps <cell>            # direct dependencies, sorted" + "\n" to file "/dev/stderr"
+    append "  sheet dependents <cell>      # reverse dependencies, sorted" + "\n" to file "/dev/stderr"
+    append "  sheet eval-order             # topological order of populated cells" + "\n" to file "/dev/stderr"
+
+define data_path as "data/sheet.json"
+
+if argument count < 2:
+    call print_usage()
+    exit with code 1
+
+define cmd as argument 1
+define cells as load_cells(data_path)
+
+if cmd == "set":
+    if argument count != 4:
+        call report_error("usage: sheet set <cell> <formula>")
+        exit with code 1
+    define cell_name as argument 2
+    define ftext as argument 3
+    if parse_cell(cell_name) is nothing:
+        call report_error("Error: invalid cell " + cell_name)
+        exit with code 1
+    define fopt as parse_formula(ftext)
+    if fopt is nothing:
+        call report_error("Error: invalid formula for " + cell_name)
+        exit with code 1
+    define f as value of fopt
+    define refs as formula_refs(f)
+    if would_cycle(cells, cell_name, refs):
+        # rejected set: nothing is applied or saved, the sheet is unchanged
+        call report_error("Error: cycle detected at " + cell_name)
+        exit with code 1
+    set cells to apply_set(cells, cell_name, ftext)
+    create directory "data"
+    call save_cells(cells, data_path)
+    print cell_name + " = " + ftext
+    exit with code 0
+
+if cmd == "get":
+    if argument count != 3:
+        call report_error("usage: sheet get <cell>")
+        exit with code 1
+    define cell_name as argument 2
+    if parse_cell(cell_name) is nothing:
+        call report_error("Error: invalid cell " + cell_name)
+        exit with code 1
+    define visiting as empty List<String>
+    define v as eval_cell(cells, cell_name, visiting)
+    print text of v
+    exit with code 0
+
+if cmd == "display":
+    if argument count != 2:
+        call report_error("usage: sheet display")
+        exit with code 1
+    define lines as display_lines(cells)
+    for each ln in lines:
+        print ln
+    exit with code 0
+
+if cmd == "deps":
+    if argument count != 3:
+        call report_error("usage: sheet deps <cell>")
+        exit with code 1
+    define cell_name as argument 2
+    if parse_cell(cell_name) is nothing:
+        call report_error("Error: invalid cell " + cell_name)
+        exit with code 1
+    define ds as deps_of(cells, cell_name)
+    for each d in ds:
+        print d
+    exit with code 0
+
+if cmd == "dependents":
+    if argument count != 3:
+        call report_error("usage: sheet dependents <cell>")
+        exit with code 1
+    define cell_name as argument 2
+    if parse_cell(cell_name) is nothing:
+        call report_error("Error: invalid cell " + cell_name)
+        exit with code 1
+    define rs as dependents_of(cells, cell_name)
+    for each r in rs:
+        print r
+    exit with code 0
+
+if cmd == "eval-order":
+    if argument count != 2:
+        call report_error("usage: sheet eval-order")
+        exit with code 1
+    define result as topo_order(cells)
+    if result.ok:
+        define order as result.order
+        for each nm in order:
+            print nm
+        exit with code 0
+    call report_error("Error: cycle detected at " + result.stuck)
+    exit with code 1
+
+call print_usage()
+exit with code 1
