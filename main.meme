@@ -1,28 +1,22 @@
 # main.meme -- sheet CLI. Thin argv router only; all domain logic lives in
 # the cells, formula, and sheet modules.
 #
-# State: data/sheet.json (List<Cell>), created on demand. A missing or
-# corrupt data file loads as an empty sheet.
-#
-# Exit codes: 0 success, 1 usage/validation error. Every error is exactly
-# one stderr line (the language has no stderr print, so error lines are
-# written with `append ... to file "/dev/stderr"`).
-
+# Errors: one line to stderr via `print error`, exit 1.
 use cells
 use formula
 use sheet
 
 function report_error(msg: String) -> Void:
-    append msg + "\n" to file "/dev/stderr"
+    print error msg
 
 function print_usage() -> Void:
-    append "Usage: sheet <command> [args]" + "\n" to file "/dev/stderr"
-    append "  sheet set <cell> <formula>   # formula: <int> | <cell> | <cell> +|-|* <cell|int> | SUM/AVG/MIN/MAX(A1:A5)" + "\n" to file "/dev/stderr"
-    append "  sheet get <cell>             # evaluated value" + "\n" to file "/dev/stderr"
-    append "  sheet display                # grid dump of populated cells" + "\n" to file "/dev/stderr"
-    append "  sheet deps <cell>            # direct dependencies, sorted" + "\n" to file "/dev/stderr"
-    append "  sheet dependents <cell>      # reverse dependencies, sorted" + "\n" to file "/dev/stderr"
-    append "  sheet eval-order             # topological order of populated cells" + "\n" to file "/dev/stderr"
+    print error "Usage: sheet <command> [args]"
+    print error "  sheet set <cell> <formula>   # formula: <int> | <cell> | <cell> +|-|* <cell|int> | SUM/AVG/MIN/MAX(A1:A5)"
+    print error "  sheet get <cell>             # evaluated value"
+    print error "  sheet display                # grid dump of populated cells"
+    print error "  sheet deps <cell>            # direct dependencies, sorted"
+    print error "  sheet dependents <cell>      # reverse dependencies, sorted"
+    print error "  sheet eval-order             # topological order of populated cells"
 
 define data_path as "data/sheet.json"
 
